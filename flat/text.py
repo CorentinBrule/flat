@@ -10,7 +10,7 @@ from .utils import dump, equal, memoize, rmq, scale
 
 
 
-linebreaks = re.compile(ur'\r\n|[\n\v\f\r\x85\u2028\u2029]') # TODO python 3: ur -> r
+linebreaks = re.compile(r'\r\n|[\n\v\f\r\x85\u2028\u2029]')
 
 
 
@@ -22,54 +22,54 @@ def _strike_textoutlines(cls, strike, string):
 
 
 class strike(object):
-    
+
     __slots__ = 'font', 'textsize', 'leading', 'textcolor'
-    
+
     def __init__(self, font):
         self.font = font
         self.textsize, self.leading = 10.0, 12.0
         self.textcolor = _default_color
-    
+
     def size(self, textsize, leading, units='pt'):
         assert textsize > 0, 'Invalid text size.'
         k = scale(units)
         self.textsize, self.leading = textsize*k, leading*k
         return self
-    
+
     def color(self, color):
         self.textcolor = color
         return self
-    
+
     @memoize
     def width(self, string):
         kerning, width, left = self.font.relativewidth(string, 0, self.textsize)
         return width
-    
+
     @memoize
     def relativewidth(self, string, left):
         return self.font.relativewidth(string, left, self.textsize)
-    
+
     def defaultadvance(self):
         return self.textsize * self.font.density * self.font.defaultadvance
-    
+
     def ascender(self):
         return self.textsize * self.font.density * self.font.ascender
-    
+
     def descender(self):
         return self.textsize * self.font.density * self.font.descender
-    
+
     def span(self, string):
         return span(self, linebreaks.sub(' ', string))
-    
+
     def paragraph(self, string):
         return paragraph(self.span(string))
-    
+
     def text(self, string):
         return _strike_textoutlines(text, self, string)
-    
+
     def outlines(self, string):
         return _strike_textoutlines(outlines, self, string)
-    
+
     def pdffont(self, name):
         return '/%s %s Tf' % (name, dump(self.textsize))
 
@@ -77,19 +77,19 @@ class strike(object):
 
 
 class span(object):
-    
+
     __slots__ = 'strike', 'string'
-    
+
     def __init__(self, strike, string):
         self.strike = strike
         self.string = string
-    
+
     def left(self, previous):
         s, p = self.strike, previous.strike
         if s.font.name == p.font.name and s.textsize == p.textsize:
             return p.font.charmap.get(ord(previous.string[-1]), 0)
         return 0
-    
+
     def run(self, start, end, left):
         charmap = self.strike.font.charmap
         kerning = self.strike.font.kerning
@@ -105,51 +105,51 @@ class span(object):
 
 
 class paragraph(object):
-    
+
     def __init__(self, *spans):
         self.spans = spans
         self.alignment = 'left'
-        
+
         self.words = words = [] # span index, character index
         self.offsets = offsets = [] # word offset, whitespace width
-        
+
         last = ''
         position = 0.0
-        
+
         oldname, oldsize = '', 0.0
         fix, left = 0.0, 0
-        
-        boundaries = re.compile(ur'([^ -]+-*|-+|^)(\s*)') # word, whitespace # TODO python 3: ur -> r
+
+        boundaries = re.compile(r'([^ -]+-*|-+|^)(\s*)')
         for i, span in enumerate(spans):
-            
+
             string, strike = span.string, span.strike
-            
+
             if not string:
                 continue
-            
+
             if strike.font.name != oldname or strike.textsize != oldsize:
                 oldname, oldsize = strike.font.name, strike.textsize
                 left = 0
-            
+
             w = []
             o = []
             for m in boundaries.finditer(string):
                 start, end1, end2 = m.start(), m.end(1), m.end(2)
-                
+
                 fix, width, left = strike.relativewidth(string[start:end1], left)
                 fixgap, gap, left = strike.relativewidth(string[end1:end2], left)
-                
+
                 if o:
                     o[-1] -= fix
                 elif offsets:
                     offsets[-1] -= fix
                 position -= fix
                 gap -= fixgap
-                
+
                 w.extend((i, start))
                 o.extend((position, gap))
                 position += width + gap
-            
+
             first = string[0]
             if last == first or last == '-' and first == ' ' or last not in ' -':
                 w[0], w[1] = words[-2], words[-1]
@@ -157,13 +157,13 @@ class paragraph(object):
                 del words[-2:]
                 del offsets[-2:]
             last = string[-1]
-            
+
             words.extend(w)
             offsets.extend(o)
-        
+
         words.extend((len(spans), 0))
         offsets.extend((position, 0))
-        
+
         leadings = []
         for j in range(0, len(words) - 2, 2):
             span0, span1 = words[j], words[j + 2]
@@ -171,33 +171,33 @@ class paragraph(object):
                 spans[span0].strike.leading if span0 == span1 else
                 max(spans[i].strike.leading for i in range(span0, span1)))
         self.leadings = rmq(leadings)
-    
+
     def count(self):
         return len(self.words) // 2 - 1
-    
+
     def align(self, alignment):
         assert alignment in (
             'left', 'right', 'center', 'justify'), 'Invalid alignment.'
         self.alignment = alignment
-    
+
     def width(self, i, j):
         offsets = self.offsets
         return offsets[j * 2] - offsets[i * 2] - offsets[j * 2 - 1]
-    
+
     def ascender(self, i, j):
         spans, words = self.spans, self.words
         span0, span1 = words[i * 2], words[j * 2]
         if span0 == span1:
             return spans[span0].strike.ascender()
         return max(spans[i].strike.ascender() for i in range(span0, span1))
-    
+
     def descender(self, i, j):
         spans, words = self.spans, self.words
         span0, span1 = words[i * 2], words[j * 2]
         if span0 == span1:
             return spans[span0].strike.descender()
         return min(spans[i].strike.descender() for i in range(span0, span1))
-    
+
     def run(self, i, j):
         spans, words = self.spans, self.words
         span0, char0 = words[i * 2], words[i * 2 + 1]
@@ -224,14 +224,14 @@ class paragraph(object):
 
 
 class text(object):
-    
+
     @classmethod
     def open(cls, path, substitutes):
         raise NotImplementedError
-    
+
     def __init__(self, *paragraphs):
         self.paragraphs = paragraphs
-    
+
     def placed(self, scale):
         return placedtext(layout(self), scale)
 
@@ -239,40 +239,40 @@ class text(object):
 
 
 class placedtext(object):
-    
+
     def __init__(self, layout, k):
         self.layout = layout
         self.index = layout.add(self)
         self.k = k
         self.x, self.y = 0.0, 0.0
         self.width, self.height = 1e100, 1e100
-    
+
     def chained(self, scale):
         return placedtext(self.layout, scale)
-    
+
     def position(self, x, y):
         self.x, self.y = x*self.k, y*self.k
         return self
-    
+
     def frame(self, x, y, width, height):
         self.x, self.y = x*self.k, y*self.k
         self.width, self.height = width*self.k, height*self.k
         self.layout.reflow(self.index)
         return self
-    
+
     def paragraphs(self):
         return self.layout.item.paragraphs
-    
+
     def overflow(self):
         return self.layout.overflow
-    
+
     def lines(self):
         for para, start, end, height in self.layout.lines(self.index):
             if end == 0:
                 yield [(para.spans[0], 0, 0, 0)], height
             else:
                 yield para.run(start, end), height
-    
+
     def bboxes(self):
         result = []
         scale = 1.0 / self.k
@@ -291,7 +291,7 @@ class placedtext(object):
                         (advance - gap) * scale, (ascender - descender) * scale))
                 x += advance
         return result
-    
+
     def pdf(self, previous, resources, colors, fonts, images, states, height):
         oldstroke, oldcolor = previous.strokecolor, previous.fillcolor
         oldname, oldsize = previous.fontname, previous.textsize
@@ -326,7 +326,7 @@ class placedtext(object):
         previous.fillcolor = oldcolor
         previous.fontname, previous.textsize = oldname, oldsize
         return '\n'.join(commands)
-    
+
     def svg(self):
         y = self.y
         elements = []
@@ -349,7 +349,7 @@ class placedtext(object):
             row.append('</text>')
             elements.append(''.join(row))
         return '\n'.join(elements)
-    
+
     def rasterize(self, rasterizer, k, x, y):
         yy = self.y
         dummy = shape().nostroke()
@@ -371,7 +371,7 @@ class placedtext(object):
 
 
 class outlines(text):
-    
+
     def placed(self, scale):
         return placedoutlines(layout(self), scale)
 
@@ -379,10 +379,10 @@ class outlines(text):
 
 
 class placedoutlines(placedtext):
-    
+
     def chained(self, scale):
         return placedoutlines(self.layout, scale)
-    
+
     def pdf(self, previous, resources, colors, fonts, images, states, height):
         oldstroke = previous.strokecolor
         y = height - self.y
@@ -407,7 +407,7 @@ class placedoutlines(placedtext):
                         commands.append(g.pdf(k, x, y, 'f'))
                     x += advance * k
         return '\n'.join(commands)
-    
+
     def svg(self):
         y = self.y
         elements = []
@@ -444,7 +444,7 @@ def _strike_pdf(resources, strike, oldname, oldsize, oldcolor, oldstroke):
 
 
 class layout(object):
-    
+
     def __init__(self, item):
         self.item = item
         self.overflow = False
@@ -453,23 +453,23 @@ class layout(object):
         self.costs = [[0.0] + [1e100] * p.count() for p in item.paragraphs]
         self.offsets = [[0.0] * (p.count() + 1) for p in item.paragraphs]
         self.ends = [(0, 0)] # paragraph, word
-    
+
     def add(self, block):
         paragraphs = self.item.paragraphs
         self.blocks.append(proxy(block))
         self.ends.append((len(paragraphs)-1, paragraphs[-1].count()))
         return len(self.blocks) - 1
-    
+
     def reflow(self, index):
         paragraphs = self.item.paragraphs
-        
+
         heights = [0.0]
         for b in self.blocks:
             heights.append(b.height + heights[-1])
         maxheight = heights[-1]
-        
+
         highestindex = index
-        
+
         para, word = self.ends[index]
         word = self.breaks[para][word]
         previousoffset = self.offsets[para][word]
@@ -480,39 +480,39 @@ class layout(object):
             offsets = self.offsets[para]
             offsets[word] = previousoffset
             n = paragraph.count()
-            
+
             if n == 0:
                 leading = paragraph.spans[0].strike.leading
                 if offsets[word] + leading > maxheight:
                     self.overflow = True
                     self.ends[-1] = para, word
                     return
-                
+
                 if heights[highestindex] < offsets[word]:
                     highestindex += 1
                 currentindex = highestindex
                 if heights[currentindex] > offsets[word]:
                     currentindex -= 1
-                
+
                 if offsets[word] + leading > heights[currentindex + 1]:
                     offsets[word] = heights[currentindex + 1] + leading
                 else:
                     offsets[word] += leading
-                
+
             else:
                 for i in range(word, n):
                     costsi = costs[i]
                     offsetsi = offsets[i]
-                    
+
                     if heights[highestindex] < offsetsi:
                         highestindex += 1
                     currentindex = highestindex
                     if heights[currentindex] > offsetsi:
                         currentindex -= 1
-                    
+
                     j = i + 1
                     while j <= n:
-                        leading = paragraph.leadings.max(i, j) 
+                        leading = paragraph.leadings.max(i, j)
                         offset = offsetsi + leading
                         if offset > heights[currentindex + 1]:
                             if currentindex + 1 == len(self.blocks):
@@ -531,15 +531,15 @@ class layout(object):
                             costs[j] = cost
                             offsets[j] = offset
                         j += 1
-                    
+
                     if costs[i + 1] == 1e100:
                         self.overflow = True
                         self.ends[-1] = para, i
                         return
-                    
+
             previousoffset = offsets[-1]
             para, word = para + 1, 0
-        
+
         para, word = self.ends[-1]
         previous = para, word
         i = len(self.ends) - 2
@@ -554,7 +554,7 @@ class layout(object):
                     break
             para, word = para - 1, self.item.paragraphs[para - 1].count()
         self.overflow = False
-    
+
     def lines(self, index):
         paragraphs = self.item.paragraphs
         para0, word0 = self.ends[index]
@@ -577,7 +577,3 @@ class layout(object):
             if end > 0:
                 result[0] = p, start, end, p.ascender(start, end)
         return result
-
-
-
-
